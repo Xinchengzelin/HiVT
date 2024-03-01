@@ -58,7 +58,7 @@ class GlobalInteractor(nn.Module):
     def forward(self,
                 data: TemporalData,
                 local_embed: torch.Tensor) -> torch.Tensor:
-        edge_index, _ = subgraph(subset=~data['padding_mask'][:, self.historical_steps - 1], edge_index=data.edge_index)
+        edge_index, _ = subgraph(subset=~data['padding_mask'][:, self.historical_steps - 1], edge_index=data.edge_index)#选择当前帧有的agent
         rel_pos = data['positions'][edge_index[0], self.historical_steps - 1] - data['positions'][
             edge_index[1], self.historical_steps - 1]
         if data['rotate_mat'] is None:
@@ -68,12 +68,12 @@ class GlobalInteractor(nn.Module):
             rel_theta = data['rotate_angles'][edge_index[0]] - data['rotate_angles'][edge_index[1]]
             rel_theta_cos = torch.cos(rel_theta).unsqueeze(-1)
             rel_theta_sin = torch.sin(rel_theta).unsqueeze(-1)
-            rel_embed = self.rel_embed([rel_pos, torch.cat((rel_theta_cos, rel_theta_sin), dim=-1)])
-        x = local_embed
+            rel_embed = self.rel_embed([rel_pos, torch.cat((rel_theta_cos, rel_theta_sin), dim=-1)]) # 输出(交互数量，64)
+        x = local_embed # (N,64)
         for layer in self.global_interactor_layers:
             x = layer(x, edge_index, rel_embed)
         x = self.norm(x)  # [N, D]
-        x = self.multihead_proj(x).view(-1, self.num_modes, self.embed_dim)  # [N, F, D]
+        x = self.multihead_proj(x).view(-1, self.num_modes, self.embed_dim)  # [N, F, D] F预测几条轨迹
         x = x.transpose(0, 1)  # [F, N, D]
         return x
 

@@ -48,7 +48,7 @@ class HiVT(pl.LightningModule):
                  T_max: int,
                  **kwargs) -> None:
         super(HiVT, self).__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters() #Save arguments to ``hparams`` attribute
         self.historical_steps = historical_steps
         self.future_steps = future_steps
         self.num_modes = num_modes
@@ -97,7 +97,7 @@ class HiVT(pl.LightningModule):
             rotate_mat[:, 1, 0] = sin_vals
             rotate_mat[:, 1, 1] = cos_vals
             if data.y is not None:
-                data.y = torch.bmm(data.y, rotate_mat)
+                data.y = torch.bmm(data.y, rotate_mat)#把每个agent的y转换到对应agent的坐标系下
             data['rotate_mat'] = rotate_mat
         else:
             data['rotate_mat'] = None
@@ -105,18 +105,18 @@ class HiVT(pl.LightningModule):
         local_embed = self.local_encoder(data=data)
         global_embed = self.global_interactor(data=data, local_embed=local_embed)
         y_hat, pi = self.decoder(local_embed=local_embed, global_embed=global_embed)
-        return y_hat, pi
+        return y_hat, pi #[F, N, H, 2], [N, F]
 
     def training_step(self, data, batch_idx):
-        y_hat, pi = self(data)
-        reg_mask = ~data['padding_mask'][:, self.historical_steps:]
-        valid_steps = reg_mask.sum(dim=-1)
+        y_hat, pi = self(data) # 输出y_hat (6,sum_num_agents, 30,4) pi:(sum_num_agents, 6)
+        reg_mask = ~data['padding_mask'][:, self.historical_steps:] #(sum_num_agents, 30)
+        valid_steps = reg_mask.sum(dim=-1) # (sum_num_agents,) 数字在[0,30]之间,表示有效的steps数值
         cls_mask = valid_steps > 0
         l2_norm = (torch.norm(y_hat[:, :, :, : 2] - data.y, p=2, dim=-1) * reg_mask).sum(dim=-1)  # [F, N]
         best_mode = l2_norm.argmin(dim=0)
-        y_hat_best = y_hat[best_mode, torch.arange(data.num_nodes)]
+        y_hat_best = y_hat[best_mode, torch.arange(data.num_nodes)] # (sum_num_agents, 30, 4)
         reg_loss = self.reg_loss(y_hat_best[reg_mask], data.y[reg_mask])
-        soft_target = F.softmax(-l2_norm[:, cls_mask] / valid_steps[cls_mask], dim=0).t().detach()
+        soft_target = F.softmax(-l2_norm[:, cls_mask] / valid_steps[cls_mask], dim=0).t().detach() # 这里有detach (valid_num_agents, 6)
         cls_loss = self.cls_loss(pi[cls_mask], soft_target)
         loss = reg_loss + cls_loss
         self.log('train_reg_loss', reg_loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=1)
@@ -124,6 +124,8 @@ class HiVT(pl.LightningModule):
 
     def validation_step(self, data, batch_idx):
         y_hat, pi = self(data)
+        # print("y_hat: ",y_hat[:,1])
+        # print("pi: ", pi[1])
         reg_mask = ~data['padding_mask'][:, self.historical_steps:]
         l2_norm = (torch.norm(y_hat[:, :, :, : 2] - data.y, p=2, dim=-1) * reg_mask).sum(dim=-1)  # [F, N]
         best_mode = l2_norm.argmin(dim=0)
@@ -146,7 +148,7 @@ class HiVT(pl.LightningModule):
     def configure_optimizers(self):
         decay = set()
         no_decay = set()
-        whitelist_weight_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention, nn.LSTM, nn.GRU)
+        whitelist_weight_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention, nn.LSTM, nn.GRU)#选择是否使用weight_decay
         blacklist_weight_modules = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm, nn.Embedding)
         for module_name, module in self.named_modules():
             for param_name, param in module.named_parameters():
@@ -186,7 +188,7 @@ class HiVT(pl.LightningModule):
         parser.add_argument('--rotate', type=bool, default=True)
         parser.add_argument('--node_dim', type=int, default=2)
         parser.add_argument('--edge_dim', type=int, default=2)
-        parser.add_argument('--embed_dim', type=int, required=True)
+        parser.add_argument('--embed_dim', type=int, default=64) #, required=True
         parser.add_argument('--num_heads', type=int, default=8)
         parser.add_argument('--dropout', type=float, default=0.1)
         parser.add_argument('--num_temporal_layers', type=int, default=4)

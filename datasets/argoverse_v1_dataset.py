@@ -103,7 +103,7 @@ def process_argoverse(split: str,
 
     av_df = df[df['OBJECT_TYPE'] == 'AV'].iloc
     av_index = actor_ids.index(av_df[0]['TRACK_ID'])
-    agent_df = df[df['OBJECT_TYPE'] == 'AGENT'].iloc
+    agent_df = df[df['OBJECT_TYPE'] == 'AGENT'].iloc #<pandas.core.indexing._iLocIndexer object at 0x7fcafc5573b0>,为了计算下面的agent_index
     agent_index = actor_ids.index(agent_df[0]['TRACK_ID'])
     city = df['CITY_NAME'].values[0]
 
@@ -115,10 +115,10 @@ def process_argoverse(split: str,
                                [torch.sin(theta), torch.cos(theta)]])
 
     # initialization
-    x = torch.zeros(num_nodes, 50, 2, dtype=torch.float)
-    edge_index = torch.LongTensor(list(permutations(range(num_nodes), 2))).t().contiguous()
+    x = torch.zeros(num_nodes, 50, 2, dtype=torch.float) 
+    edge_index = torch.LongTensor(list(permutations(range(num_nodes), 2))).t().contiguous() 
     padding_mask = torch.ones(num_nodes, 50, dtype=torch.bool)
-    bos_mask = torch.zeros(num_nodes, 20, dtype=torch.bool)
+    bos_mask = torch.zeros(num_nodes, 20, dtype=torch.bool)#如果t-1帧无效，t帧有效，那么t帧就是begin of sequence(bos)
     rotate_angles = torch.zeros(num_nodes, dtype=torch.float)
 
     for actor_id, actor_df in df.groupby('TRACK_ID'):
@@ -128,7 +128,7 @@ def process_argoverse(split: str,
         if padding_mask[node_idx, 19]:  # make no predictions for actors that are unseen at the current time step
             padding_mask[node_idx, 20:] = True
         xy = torch.from_numpy(np.stack([actor_df['X'].values, actor_df['Y'].values], axis=-1)).float()
-        x[node_idx, node_steps] = torch.matmul(xy - origin, rotate_mat)
+        x[node_idx, node_steps] = torch.matmul(xy - origin, rotate_mat)  #TODO 不应该是rotate_mat*(xy-origin)?? 不是，注意xy是行向量
         node_historical_steps = list(filter(lambda node_step: node_step < 20, node_steps))
         if len(node_historical_steps) > 1:  # calculate the heading of the actor (approximately)
             heading_vector = x[node_idx, node_historical_steps[-1]] - x[node_idx, node_historical_steps[-2]]
@@ -141,7 +141,7 @@ def process_argoverse(split: str,
     bos_mask[:, 1: 20] = padding_mask[:, : 19] & ~padding_mask[:, 1: 20]
 
     positions = x.clone()
-    x[:, 20:] = torch.where((padding_mask[:, 19].unsqueeze(-1) | padding_mask[:, 20:]).unsqueeze(-1),
+    x[:, 20:] = torch.where((padding_mask[:, 19].unsqueeze(-1) | padding_mask[:, 20:]).unsqueeze(-1), # | 也可以broadcast
                             torch.zeros(num_nodes, 30, 2),
                             x[:, 20:] - x[:, 19].unsqueeze(-2))
     x[:, 1: 20] = torch.where((padding_mask[:, : 19] | padding_mask[:, 1: 20]).unsqueeze(-1),
@@ -154,9 +154,9 @@ def process_argoverse(split: str,
     node_inds_19 = [actor_ids.index(actor_id) for actor_id in df_19['TRACK_ID']]
     node_positions_19 = torch.from_numpy(np.stack([df_19['X'].values, df_19['Y'].values], axis=-1)).float()
     (lane_vectors, is_intersections, turn_directions, traffic_controls, lane_actor_index,
-     lane_actor_vectors) = get_lane_features(am, node_inds_19, node_positions_19, origin, rotate_mat, city, radius)
+     lane_actor_vectors, lane_positions) = get_lane_features(am, node_inds_19, node_positions_19, origin, rotate_mat, city, radius)
 
-    y = None if split == 'test' else x[:, 20:]
+    y = None if split == 'test' else x[:, 20:] # test数据集没有y
     seq_id = os.path.splitext(os.path.basename(raw_path))[0]
 
     return {
@@ -167,37 +167,38 @@ def process_argoverse(split: str,
         'num_nodes': num_nodes,
         'padding_mask': padding_mask,  # [N, 50]
         'bos_mask': bos_mask,  # [N, 20]
-        'rotate_angles': rotate_angles,  # [N]
-        'lane_vectors': lane_vectors,  # [L, 2]
+        'rotate_angles': rotate_angles,  # [N] 每个agent计算出的heading
+        'lane_vectors': lane_vectors,  # [L, 2] 两个点差值的向量
         'is_intersections': is_intersections,  # [L]
         'turn_directions': turn_directions,  # [L]
         'traffic_controls': traffic_controls,  # [L]
-        'lane_actor_index': lane_actor_index,  # [2, E_{A-L}]
-        'lane_actor_vectors': lane_actor_vectors,  # [E_{A-L}, 2]
+        'lane_actor_index': lane_actor_index,  # [2, E_{A-L}] （2,选中地图点数量-点可能重复） 0行是第几个地图点，1行是lane_actor_vectors这个点对应的第几个障碍物
+        'lane_actor_vectors': lane_actor_vectors,  # [E_{A-L}, 2] （选中地图点数量-点可能重复,2）
         'seq_id': int(seq_id),
         'av_index': av_index,
         'agent_index': agent_index,
         'city': city,
         'origin': origin.unsqueeze(0),
         'theta': theta,
+        'lane_positions':lane_positions #[L]
     }
 
 
 def get_lane_features(am: ArgoverseMap,
-                      node_inds: List[int],
-                      node_positions: torch.Tensor,
-                      origin: torch.Tensor,
-                      rotate_mat: torch.Tensor,
+                      node_inds: List[int], #所有agent的id序号集合
+                      node_positions: torch.Tensor, #所有agent的当前位置集合 (N,2)
+                      origin: torch.Tensor, #自车当前位置
+                      rotate_mat: torch.Tensor, #自车当前位置的旋转矩阵
                       city: str,
                       radius: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
                                               torch.Tensor]:
     lane_positions, lane_vectors, is_intersections, turn_directions, traffic_controls = [], [], [], [], []
     lane_ids = set()
     for node_position in node_positions:
-        lane_ids.update(am.get_lane_ids_in_xy_bbox(node_position[0], node_position[1], city, radius))
-    node_positions = torch.matmul(node_positions - origin, rotate_mat).float()
+        lane_ids.update(am.get_lane_ids_in_xy_bbox(node_position[0], node_position[1], city, radius))#得到curr_lane_candidates
+    node_positions = torch.matmul(node_positions - origin, rotate_mat).float() # 所有agent的当前位置进行坐标系转换
     for lane_id in lane_ids:
-        lane_centerline = torch.from_numpy(am.get_lane_segment_centerline(lane_id, city)[:, : 2]).float()
+        lane_centerline = torch.from_numpy(am.get_lane_segment_centerline(lane_id, city)[:, : 2]).float()#Retrieve polyline coordinates of query lane segment ID
         lane_centerline = torch.matmul(lane_centerline - origin, rotate_mat)
         is_intersection = am.lane_is_in_intersection(lane_id, city)
         turn_direction = am.get_lane_turn_direction(lane_id, city)
@@ -216,17 +217,22 @@ def get_lane_features(am: ArgoverseMap,
             raise ValueError('turn direction is not valid')
         turn_directions.append(turn_direction * torch.ones(count, dtype=torch.uint8))
         traffic_controls.append(traffic_control * torch.ones(count, dtype=torch.uint8))
-    lane_positions = torch.cat(lane_positions, dim=0)
-    lane_vectors = torch.cat(lane_vectors, dim=0)
+    lane_positions = torch.cat(lane_positions, dim=0) # 中心线前N-1个位置-第一个点的位置
+    lane_vectors = torch.cat(lane_vectors, dim=0) # 两个点差值的向量
     is_intersections = torch.cat(is_intersections, dim=0)
     turn_directions = torch.cat(turn_directions, dim=0)
     traffic_controls = torch.cat(traffic_controls, dim=0)
 
+    # 一个mask矩阵把每个agent对应的地图都选出来了 edge: 地图Vector-> actor_id  (2, num_agents*L)
+    # [(lane_point0, agent0),(lane_point0, agent1), (lane_point1, agent0),...]
     lane_actor_index = torch.LongTensor(list(product(torch.arange(lane_vectors.size(0)), node_inds))).t().contiguous()
+    # (num_agents*L, 2) 依次为每个点相对于agents的坐标
     lane_actor_vectors = \
         lane_positions.repeat_interleave(len(node_inds), dim=0) - node_positions.repeat(lane_vectors.size(0), 1)
-    mask = torch.norm(lane_actor_vectors, p=2, dim=-1) < radius
+    mask = torch.norm(lane_actor_vectors, p=2, dim=-1) < radius #(num_agents*L,)
+    # （2,选中地图点数量-点可能重复） 0行是第几个地图点，1行是lane_actor_vectors这个点对应的第几个障碍物
     lane_actor_index = lane_actor_index[:, mask]
+    # （选中地图点数量,2）
     lane_actor_vectors = lane_actor_vectors[mask]
 
-    return lane_vectors, is_intersections, turn_directions, traffic_controls, lane_actor_index, lane_actor_vectors
+    return lane_vectors, is_intersections, turn_directions, traffic_controls, lane_actor_index, lane_actor_vectors, lane_positions

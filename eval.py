@@ -23,13 +23,13 @@ if __name__ == '__main__':
     pl.seed_everything(2022)
 
     parser = ArgumentParser()
-    parser.add_argument('--root', type=str, required=True)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--root', type=str,default="/media/zetlin/Data2/Argoverse1_1/forecasting_sample_v1.1/forecasting_sample/data/") #, required=True
+    parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--persistent_workers', type=bool, default=True)
     parser.add_argument('--gpus', type=int, default=1)
-    parser.add_argument('--ckpt_path', type=str, required=True)
+    parser.add_argument('--ckpt_path', type=str,default="./checkpoints/HiVT-64/checkpoints/epoch=63-step=411903.ckpt") #, required=True
     args = parser.parse_args()
 
     trainer = pl.Trainer.from_argparse_args(args)

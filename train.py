@@ -18,12 +18,15 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 from datamodules import ArgoverseV1DataModule
 from models.hivt import HiVT
+import torch
+
+TRAIN_MODEL = True
 
 if __name__ == '__main__':
     pl.seed_everything(2022)
 
     parser = ArgumentParser()
-    parser.add_argument('--root', type=str, required=True)
+    parser.add_argument('--root', type=str, default="/media/zetlin/Data2/Argoverse1_1/forecasting_sample_v1.1/forecasting_sample/data/") # required=True
     parser.add_argument('--train_batch_size', type=int, default=32)
     parser.add_argument('--val_batch_size', type=int, default=32)
     parser.add_argument('--shuffle', type=bool, default=True)
@@ -40,5 +43,23 @@ if __name__ == '__main__':
     model_checkpoint = ModelCheckpoint(monitor=args.monitor, save_top_k=args.save_top_k, mode='min')
     trainer = pl.Trainer.from_argparse_args(args, callbacks=[model_checkpoint])
     model = HiVT(**vars(args))
+    
     datamodule = ArgoverseV1DataModule.from_argparse_args(args)
-    trainer.fit(model, datamodule)
+    if TRAIN_MODEL:
+        trainer.fit(model, datamodule)
+    else:
+        from datasets import ArgoverseV1Dataset
+        print(model.device)
+        data = ArgoverseV1Dataset(args.root, 'train', None, 50).get(0)
+        print(data['seq_id'],data['positions'].shape, data['lane_vectors'].shape)
+
+        # 加载训练的权重
+        ckt = torch.load("./checkpoints/HiVT-64/checkpoints/epoch=63-step=411903.ckpt")
+        for k,v in model.state_dict().items():
+            model.state_dict()[k] = v.to("cpu")
+        model.load_state_dict(ckt['state_dict'],strict=True)
+        model.eval()
+        res = model(data)
+        # print({k:v.shape for k,v in model.state_dict().items()})
+        # print(res,"\n",res[0].shape,res[1].shape)
+        print(res[0][:,0])
